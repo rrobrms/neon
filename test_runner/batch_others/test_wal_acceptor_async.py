@@ -270,7 +270,7 @@ async def run_compute_restarts(env: NeonEnv, queries=50, batch_insert=10000, bra
             sum += batch_insert
             cnt += batch_insert
         elif (i % 4 == 1) or (i % 4 == 3):
-            actual_sum = await exec_compute_query(env, branch, 'SELECT SUM(i) FROM t')
+            actual_sum = (await exec_compute_query(env, branch, 'SELECT SUM(i) FROM t'))[0][0]
             assert actual_sum == sum, f'Expected sum={sum}, actual={actual_sum}'
         elif i % 4 == 2:
             await exec_compute_query(env, branch, 'UPDATE t SET i = i + 1')
