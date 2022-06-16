@@ -236,6 +236,7 @@ def test_restarts_frequent_checkpoints(neon_env_builder: NeonEnvBuilder):
     # are not removed before broadcasted to all safekeepers, with the help of replication slot
     asyncio.run(run_restarts_under_load(env, pg, env.safekeepers, period_time=15, iterations=5))
 
+
 def postgres_create_start(env: NeonEnv, branch: str, pgdir_name: Optional[str]):
     pg = Postgres(
         env,
@@ -246,9 +247,15 @@ def postgres_create_start(env: NeonEnv, branch: str, pgdir_name: Optional[str]):
     node_name = pgdir_name or f'pg_node_{time.time()}'
 
     # embed current time in node name
-    return pg.create_start(branch_name=branch, node_name=node_name, config_lines=['log_statement=all'])
+    return pg.create_start(branch_name=branch,
+                           node_name=node_name,
+                           config_lines=['log_statement=all'])
 
-async def exec_compute_query(env: NeonEnv, branch: str, query: str, pgdir_name: Optional[str] = None) -> list:
+
+async def exec_compute_query(env: NeonEnv,
+                             branch: str,
+                             query: str,
+                             pgdir_name: Optional[str] = None):
     with postgres_create_start(env, branch=branch, pgdir_name=pgdir_name) as pg:
         before_conn = time.time()
         conn = await pg.connect_async()
@@ -258,7 +265,11 @@ async def exec_compute_query(env: NeonEnv, branch: str, query: str, pgdir_name: 
         log.info(f'{query} took {after_conn - before_conn}s')
         return res
 
-async def run_compute_restarts(env: NeonEnv, queries=50, batch_insert=10000, branch='test_compute_restarts'):
+
+async def run_compute_restarts(env: NeonEnv,
+                               queries=50,
+                               batch_insert=10000,
+                               branch='test_compute_restarts'):
     cnt = 0
     sum = 0
 
@@ -266,7 +277,8 @@ async def run_compute_restarts(env: NeonEnv, queries=50, batch_insert=10000, bra
 
     for i in range(queries):
         if i % 4 == 0:
-            await exec_compute_query(env, branch, f'INSERT INTO t SELECT 1 FROM generate_series(1, {batch_insert})')
+            await exec_compute_query(
+                env, branch, f'INSERT INTO t SELECT 1 FROM generate_series(1, {batch_insert})')
             sum += batch_insert
             cnt += batch_insert
         elif (i % 4 == 1) or (i % 4 == 3):
@@ -285,6 +297,7 @@ def test_compute_restarts(neon_env_builder: NeonEnvBuilder):
     env.neon_cli.create_branch('test_compute_restarts')
     asyncio.run(run_compute_restarts(env))
 
+
 class BackgroundCompute(object):
     def __init__(self, index: int, env: NeonEnv, branch: str):
         self.index = index
@@ -293,7 +306,7 @@ class BackgroundCompute(object):
         self.running = False
         self.stopped = False
         self.total_tries = 0
-        self.successful_queries = []
+        self.successful_queries: List[int] = []
 
     async def run(self):
         if self.running:
@@ -323,8 +336,15 @@ class BackgroundCompute(object):
             await asyncio.sleep(random.random())
         self.running = False
 
-async def run_concurrent_computes(env: NeonEnv, num_computes=10, run_seconds=20, branch='test_concurrent_computes'):
-    await exec_compute_query(env, branch, 'CREATE TABLE query_log (t timestamp default now(), index int, verify_key int)')
+
+async def run_concurrent_computes(env: NeonEnv,
+                                  num_computes=10,
+                                  run_seconds=20,
+                                  branch='test_concurrent_computes'):
+    await exec_compute_query(
+        env,
+        branch,
+        'CREATE TABLE query_log (t timestamp default now(), index int, verify_key int)')
 
     computes = [BackgroundCompute(i, env, branch) for i in range(num_computes)]
     background_tasks = [asyncio.create_task(compute.run()) for compute in computes]
@@ -343,6 +363,7 @@ async def run_concurrent_computes(env: NeonEnv, num_computes=10, run_seconds=20,
     for compute in computes:
         for verify_key in compute.successful_queries:
             assert verify_key in [row[2] for row in result]
+
 
 def test_concurrent_computes(neon_env_builder: NeonEnvBuilder):
     neon_env_builder.num_safekeepers = 3
