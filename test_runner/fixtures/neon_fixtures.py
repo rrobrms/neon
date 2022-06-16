@@ -1703,7 +1703,7 @@ class Postgres(PgProtocol):
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.stop_and_destroy()
+        self.stop()
 
 
 class PostgresFactory:

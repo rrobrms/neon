@@ -8,7 +8,7 @@ import time
 from fixtures.neon_fixtures import NeonEnv, NeonEnvBuilder, Postgres, Safekeeper
 from fixtures.log_helper import getLogger
 from fixtures.utils import lsn_from_hex, lsn_to_hex
-from typing import List
+from typing import List, Optional
 
 log = getLogger('root.safekeeper_async')
 
@@ -236,18 +236,20 @@ def test_restarts_frequent_checkpoints(neon_env_builder: NeonEnvBuilder):
     # are not removed before broadcasted to all safekeepers, with the help of replication slot
     asyncio.run(run_restarts_under_load(env, pg, env.safekeepers, period_time=15, iterations=5))
 
-def postgres_create_start(env: NeonEnv, branch: str):
+def postgres_create_start(env: NeonEnv, branch: str, pgdir_name: Optional[str]):
     pg = Postgres(
         env,
         tenant_id=env.initial_tenant,
         port=env.port_distributor.get_port(),
     )
 
-    # embed current time in node name
-    return pg.create_start(branch_name=branch, node_name=f'pg_node_{time.time()}')
+    node_name = pgdir_name or f'pg_node_{time.time()}'
 
-async def exec_compute_query(env: NeonEnv, branch: str, query: str) -> list:
-    with postgres_create_start(env, branch=branch) as pg:
+    # embed current time in node name
+    return pg.create_start(branch_name=branch, node_name=node_name, config_lines=['log_statement=all'])
+
+async def exec_compute_query(env: NeonEnv, branch: str, query: str, pgdir_name: Optional[str] = None) -> list:
+    with postgres_create_start(env, branch=branch, pgdir_name=pgdir_name) as pg:
         before_conn = time.time()
         conn = await pg.connect_async()
         res = await conn.fetch(query)
@@ -281,16 +283,6 @@ def test_compute_restarts(neon_env_builder: NeonEnvBuilder):
     env = neon_env_builder.init_start()
 
     env.neon_cli.create_branch('test_compute_restarts')
-
-
-    pg = env.postgres.create_start('test_compute_restarts',
-                                   config_lines=[
-                                       'max_replication_write_lag=1MB',
-                                       'min_wal_size=32MB',
-                                       'max_wal_size=32MB',
-                                       'log_checkpoints=on'
-                                   ])
-
     asyncio.run(run_compute_restarts(env))
 
 class BackgroundCompute(object):
@@ -312,7 +304,17 @@ class BackgroundCompute(object):
             try:
                 verify_key = random.randint(0, 1000000000)
                 self.total_tries += 1
-                await exec_compute_query(self.env, self.branch, f'INSERT INTO query_log(index, verify_key) VALUES ({self.index}, {verify_key})')
+                res = await exec_compute_query(
+                    self.env,
+                    self.branch,
+                    f'INSERT INTO query_log(index, verify_key) VALUES ({self.index}, {verify_key}) RETURNING verify_key',
+                    pgdir_name=f'bgcompute{self.index}_key{verify_key}',
+                )
+                log.info(f'result: {res}')
+                if len(res) != 1:
+                    raise Exception('No result returned')
+                if res[0][0] != verify_key:
+                    raise Exception('Wrong result returned')
                 self.successful_queries.append(verify_key)
             except Exception as e:
                 log.info(f'BackgroundCompute {self.index} query failed: {e}')
@@ -347,13 +349,4 @@ def test_concurrent_computes(neon_env_builder: NeonEnvBuilder):
     env = neon_env_builder.init_start()
 
     env.neon_cli.create_branch('test_concurrent_computes')
-
-    pg = env.postgres.create_start('test_concurrent_computes',
-                                   config_lines=[
-                                       'max_replication_write_lag=1MB',
-                                       'min_wal_size=32MB',
-                                       'max_wal_size=32MB',
-                                       'log_checkpoints=on'
-                                   ])
-
     asyncio.run(run_concurrent_computes(env))
