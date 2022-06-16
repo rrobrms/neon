@@ -338,6 +338,12 @@ class PgProtocol:
                     conn_options['server_settings'] = {key: val}
         return await asyncpg.connect(**conn_options)
 
+    async def safe_psql_async(self, query: str):
+        conn = await self.connect_async()
+        res = await conn.fetchval(query)
+        await conn.close()
+        return res
+
     def safe_psql(self, query: str, **kwargs: Any) -> List[Tuple[Any, ...]]:
         """
         Execute query against the node and return all rows.
@@ -1680,6 +1686,8 @@ class Postgres(PgProtocol):
         Returns self.
         """
 
+        started_at = time.time()
+
         self.create(
             branch_name=branch_name,
             node_name=node_name,
@@ -1687,13 +1695,15 @@ class Postgres(PgProtocol):
             lsn=lsn,
         ).start()
 
+        log.info(f"Postgres startup took {time.time() - started_at} seconds")
+
         return self
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.stop()
+        self.stop_and_destroy()
 
 
 class PostgresFactory:

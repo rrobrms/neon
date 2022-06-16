@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+
 import asyncpg
 import random
 import time
@@ -234,3 +235,125 @@ def test_restarts_frequent_checkpoints(neon_env_builder: NeonEnvBuilder):
     # we try to simulate large (flush_lsn - truncate_lsn) lag, to test that WAL segments
     # are not removed before broadcasted to all safekeepers, with the help of replication slot
     asyncio.run(run_restarts_under_load(env, pg, env.safekeepers, period_time=15, iterations=5))
+
+def postgres_create_start(env: NeonEnv, branch: str):
+    pg = Postgres(
+        env,
+        tenant_id=env.initial_tenant,
+        port=env.port_distributor.get_port(),
+    )
+
+    # embed current time in node name
+    return pg.create_start(branch_name=branch, node_name=f'pg_node_{time.time()}')
+
+async def exec_compute_query(env: NeonEnv, branch: str, query: str) -> list:
+    with postgres_create_start(env, branch=branch) as pg:
+        before_conn = time.time()
+        conn = await pg.connect_async()
+        res = await conn.fetch(query)
+        await conn.close()
+        after_conn = time.time()
+        log.info(f'{query} took {after_conn - before_conn}s')
+        return res
+
+async def run_compute_restarts(env: NeonEnv, queries=50, batch_insert=10000, branch='test_compute_restarts'):
+    cnt = 0
+    sum = 0
+
+    await exec_compute_query(env, branch, 'CREATE TABLE t (i int)')
+
+    for i in range(queries):
+        if i % 4 == 0:
+            await exec_compute_query(env, branch, f'INSERT INTO t SELECT 1 FROM generate_series(1, {batch_insert})')
+            sum += batch_insert
+            cnt += batch_insert
+        elif (i % 4 == 1) or (i % 4 == 3):
+            actual_sum = await exec_compute_query(env, branch, 'SELECT SUM(i) FROM t')
+            assert actual_sum == sum, f'Expected sum={sum}, actual={actual_sum}'
+        elif i % 4 == 2:
+            await exec_compute_query(env, branch, 'UPDATE t SET i = i + 1')
+            sum += cnt
+
+
+# Add a test which creates compute for every query, and then destroys it right after.
+def test_compute_restarts(neon_env_builder: NeonEnvBuilder):
+    neon_env_builder.num_safekeepers = 3
+    env = neon_env_builder.init_start()
+
+    env.neon_cli.create_branch('test_compute_restarts')
+
+
+    pg = env.postgres.create_start('test_compute_restarts',
+                                   config_lines=[
+                                       'max_replication_write_lag=1MB',
+                                       'min_wal_size=32MB',
+                                       'max_wal_size=32MB',
+                                       'log_checkpoints=on'
+                                   ])
+
+    asyncio.run(run_compute_restarts(env))
+
+class BackgroundCompute(object):
+    def __init__(self, index: int, env: NeonEnv, branch: str):
+        self.index = index
+        self.env = env
+        self.branch = branch
+        self.running = False
+        self.stopped = False
+        self.total_tries = 0
+        self.successful_queries = []
+
+    async def run(self):
+        if self.running:
+            raise Exception('BackgroundCompute is already running')
+
+        self.running = True
+        while not self.stopped:
+            try:
+                verify_key = random.randint(0, 1000000000)
+                self.total_tries += 1
+                await exec_compute_query(self.env, self.branch, f'INSERT INTO query_log(index, verify_key) VALUES ({self.index}, {verify_key})')
+                self.successful_queries.append(verify_key)
+            except Exception as e:
+                log.info(f'BackgroundCompute {self.index} query failed: {e}')
+
+            # sleep for at most 1 second
+            await asyncio.sleep(random.random())
+        self.running = False
+
+async def run_concurrent_computes(env: NeonEnv, num_computes=10, run_seconds=20, branch='test_concurrent_computes'):
+    await exec_compute_query(env, branch, 'CREATE TABLE query_log (t timestamp default now(), index int, verify_key int)')
+
+    computes = [BackgroundCompute(i, env, branch) for i in range(num_computes)]
+    background_tasks = [asyncio.create_task(compute.run()) for compute in computes]
+
+    await asyncio.sleep(run_seconds)
+    for compute in computes:
+        compute.stopped = True
+
+    await asyncio.gather(*background_tasks)
+
+    result = await exec_compute_query(env, branch, 'SELECT * FROM query_log')
+    log.info(f'Executed {len(result)} queries')
+    for row in result:
+        log.info(f'{row[0]} {row[1]} {row[2]}')
+
+    for compute in computes:
+        for verify_key in compute.successful_queries:
+            assert verify_key in [row[2] for row in result]
+
+def test_concurrent_computes(neon_env_builder: NeonEnvBuilder):
+    neon_env_builder.num_safekeepers = 3
+    env = neon_env_builder.init_start()
+
+    env.neon_cli.create_branch('test_concurrent_computes')
+
+    pg = env.postgres.create_start('test_concurrent_computes',
+                                   config_lines=[
+                                       'max_replication_write_lag=1MB',
+                                       'min_wal_size=32MB',
+                                       'max_wal_size=32MB',
+                                       'log_checkpoints=on'
+                                   ])
+
+    asyncio.run(run_concurrent_computes(env))
