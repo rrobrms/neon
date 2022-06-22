@@ -338,12 +338,6 @@ class PgProtocol:
                     conn_options['server_settings'] = {key: val}
         return await asyncpg.connect(**conn_options)
 
-    async def safe_psql_async(self, query: str):
-        conn = await self.connect_async()
-        res = await conn.fetchval(query)
-        await conn.close()
-        return res
-
     def safe_psql(self, query: str, **kwargs: Any) -> List[Tuple[Any, ...]]:
         """
         Execute query against the node and return all rows.

@@ -244,9 +244,8 @@ def postgres_create_start(env: NeonEnv, branch: str, pgdir_name: Optional[str]):
         port=env.port_distributor.get_port(),
     )
 
-    node_name = pgdir_name or f'pg_node_{time.time()}'
-
     # embed current time in node name
+    node_name = pgdir_name or f'pg_node_{time.time()}'
     return pg.create_start(branch_name=branch,
                            node_name=node_name,
                            config_lines=['log_statement=all'])
@@ -267,7 +266,7 @@ async def exec_compute_query(env: NeonEnv,
 
 
 async def run_compute_restarts(env: NeonEnv,
-                               queries=50,
+                               queries=16,
                                batch_insert=10000,
                                branch='test_compute_restarts'):
     cnt = 0
