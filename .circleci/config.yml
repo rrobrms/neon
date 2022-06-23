@@ -286,7 +286,7 @@ jobs:
           # no_output_timeout, specified here.
           no_output_timeout: 10m
           environment:
-            - ZENITH_BIN: /tmp/zenith/bin
+            - NEON_BIN: /tmp/zenith/bin
             - POSTGRES_DISTRIB_DIR: /tmp/zenith/pg_install
             - TEST_OUTPUT: /tmp/test_output
             # this variable will be embedded in perf test report
