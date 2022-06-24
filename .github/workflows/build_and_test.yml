@@ -167,7 +167,7 @@ jobs:
             for bin in $test_exe_paths; do
               SRC=$bin
               DST=/tmp/neon/test_bin/$(basename $bin)
-              cp "$SRC" $DST"
+              cp "$SRC" "$DST"
               echo "$DST" >> /tmp/neon/coverage/binaries.list
             done
           fi
