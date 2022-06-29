@@ -1983,7 +1983,7 @@ class Etcd:
 def get_test_output_dir(request: Any) -> str:
     """ Compute the working directory for an individual test. """
     test_name = request.node.name
-    test_dir = os.path.join(str(top_output_dir), test_name)
+    test_dir = os.path.join(str(top_output_dir), test_name.replace("/", "-"))
     log.info(f'get_test_output_dir is {test_dir}')
     return test_dir
 
