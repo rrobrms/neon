@@ -220,23 +220,27 @@ impl Repository for LayeredRepository {
 
     fn create_empty_timeline(
         &self,
-        timelineid: ZTimelineId,
+        timeline_id: ZTimelineId,
         initdb_lsn: Lsn,
     ) -> Result<Arc<LayeredTimeline>> {
         let mut timelines = self.timelines.lock().unwrap();
+        let vacant_timeline_entry = match timelines.entry(timeline_id) {
+            Entry::Occupied(_) => bail!("Timeline already exists"),
+            Entry::Vacant(vacant_entry) => vacant_entry,
+        };
 
         // Create the timeline directory, and write initial metadata to file.
-        crashsafe_dir::create_dir_all(self.conf.timeline_path(&timelineid, &self.tenant_id))?;
+        crashsafe_dir::create_dir_all(self.conf.timeline_path(&timeline_id, &self.tenant_id))?;
 
         let metadata = TimelineMetadata::new(Lsn(0), None, None, Lsn(0), initdb_lsn, initdb_lsn);
-        Self::save_metadata(self.conf, timelineid, self.tenant_id, &metadata, true)?;
+        Self::save_metadata(self.conf, timeline_id, self.tenant_id, &metadata, true)?;
 
         let timeline = LayeredTimeline::new(
             self.conf,
             Arc::clone(&self.tenant_conf),
             metadata,
             None,
-            timelineid,
+            timeline_id,
             self.tenant_id,
             Arc::clone(&self.walredo_mgr),
             self.upload_layers,
@@ -245,12 +249,7 @@ impl Repository for LayeredRepository {
 
         // Insert if not exists
         let timeline = Arc::new(timeline);
-        match timelines.entry(timelineid) {
-            Entry::Occupied(_) => bail!("Timeline already exists"),
-            Entry::Vacant(vacant) => {
-                vacant.insert(LayeredTimelineEntry::Loaded(Arc::clone(&timeline)))
-            }
-        };
+        vacant_timeline_entry.insert(LayeredTimelineEntry::Loaded(Arc::clone(&timeline)));
 
         Ok(timeline)
     }
